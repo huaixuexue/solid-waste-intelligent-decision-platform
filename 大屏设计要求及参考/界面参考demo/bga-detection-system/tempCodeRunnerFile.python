@@ -1,0 +1,163 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import glob
+
+# === 字体设置：宋体 + 负号正常显示 ===
+plt.rcParams['font.sans-serif'] = ['SimSun', 'Songti SC', 'STSong']
+plt.rcParams['axes.unicode_minus'] = False
+
+def plot_pr_curves_from_csv_folder(folder_path, save=False, save_path=None):
+    """
+    从指定文件夹读取所有 *_Box.csv 文件，绘制 PR 曲线对比图。
+    自动识别 Recall 和 Precision 列。
+    """
+
+    # 定义模型配置 (颜色与线宽)
+    model_config = {
+        'yolov5':  {'label': 'YOLOv5',      'color': '#0000FF', 'lw': 1.2, 'order': 1},
+        'yolov8':  {'label': 'YOLOv8',      'color': '#6495ED', 'lw': 1.2, 'order': 2},
+        'yolov10': {'label': 'YOLOv10',     'color': '#8A2BE2', 'lw': 1.2, 'order': 3},
+        'yolo11':  {'label': 'YOLO11',      'color': '#90EE90', 'lw': 1.2, 'order': 4},
+        'yolo12':  {'label': 'YOLO12',      'color': '#FF8C00', 'lw': 1.2, 'order': 5}, 
+        'hmc':     {'label': 'YOLO-HMC',    'color': '#FFFF00', 'lw': 1.2, 'order': 7},
+        'gcc':     {'label': 'GCC-YOLO',    'color': '#008000', 'lw': 1.2, 'order': 8},
+        'rtdetr':  {'label': 'RT-DETR',     'color': '#DA70D6', 'lw': 1.2, 'order': 9},
+        'mce':     {'label': 'YOLO-MCE (Ours)', 'color': '#FF0000', 'lw': 2.5, 'order': 10}  # 本文方法加粗红
+    }
+
+    # 获取所有 _Box.csv 文件
+    csv_files = glob.glob(os.path.join(folder_path, "*_Box.csv"))
+    
+    if not csv_files:
+        print(f"❌ 文件夹 '{folder_path}' 中没有找到 *_Box.csv 文件！")
+        return
+
+    # 创建图形（单栏尺寸）
+    plt.figure(figsize=(3.2, 2.6), dpi=300)
+
+    temp_plots = []
+
+    for file_path in csv_files:
+        filename = os.path.basename(file_path)
+        filename_lower = filename.lower()
+        
+        try:
+            # 读取 CSV（无表头）
+            df = pd.read_csv(file_path, header=None)
+            
+            if df.shape[1] < 2:
+                print(f"⚠️ 警告: {filename} 列数不足，跳过。")
+                continue
+            
+            col1 = df[0].values
+            col2 = df[1].values
+            
+            # === 自动判断哪列是 Recall（递增），哪列是 Precision（递减/波动）===
+            # 方法：看首尾值 —— Recall 通常从 0→1，Precision 从 1→0
+            if col1[0] <= col1[-1]:  # 第一列从小到大 → 是 Recall
+                recall = col1
+                precision = col2
+            else:
+                recall = col2
+                precision = col1
+
+            # 过滤无效值
+            valid_mask = ~(np.isnan(recall) | np.isnan(precision) | np.isinf(recall) | np.isinf(precision))
+            recall = recall[valid_mask]
+            precision = precision[valid_mask]
+            
+            if len(recall) < 2:
+                continue
+
+        except Exception as e:
+            print(f"读取失败 {filename}: {e}")
+            continue
+
+        # 匹配模型名称
+        config = None
+        matched_key = None
+        
+        for key, cfg in model_config.items():
+            if key in filename_lower:
+                config = cfg
+                matched_key = key
+                break
+        
+        if not config:
+            # 未匹配到的模型使用默认灰色
+            config = {
+                'label': filename.replace('_Box.csv', ''),
+                'color': '#7f7f7f', 
+                'lw': 1.2,
+                'order': 99 
+            }
+            matched_key = 'unknown'
+
+        # 绘制曲线
+        line_obj, = plt.plot(recall, precision, color=config['color'], linewidth=config['lw'])
+        
+        temp_plots.append({
+            'key': matched_key,
+            'order': config['order'],
+            'handle': line_obj,
+            'label': config['label']
+        })
+        print(f"✅ 已加载: {config['label']}")
+
+    if not temp_plots:
+        print("❌ 没有成功绘制任何曲线。")
+        return
+
+    # 按 order 排序（确保图例顺序一致）
+    temp_plots.sort(key=lambda x: x['order'])
+
+    plot_handles = [item['handle'] for item in temp_plots]
+    plot_labels = [item['label'] for item in temp_plots]
+
+    # --- 绘图美化 ---
+    plt.xlabel('Recall', fontsize=9)
+    plt.xlim(0.0, 1.0)
+    plt.xticks(np.arange(0.0, 1.1, 0.2), fontsize=8)
+
+    plt.ylabel('Precision', fontsize=9)
+    plt.ylim(0.0, 1.05)
+    plt.yticks(np.arange(0.0, 1.1, 0.2), fontsize=8)
+
+    # 图例：左下角
+    plt.legend(plot_handles, plot_labels, loc='lower left', fontsize=7, frameon=True, edgecolor='black', borderpad=0.3)
+
+    ax = plt.gca()
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
+
+    plt.tight_layout(pad=0.2)
+
+    # === 保存或显示 ===
+    if save and save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"📷 图片已保存至: {save_path}")
+    else:
+        plt.show()
+
+if __name__ == "__main__":
+    # === 你的实际路径 ===
+    folder_path = r'D:\Master\小论文\数据记录\小论文对比实验曲线图\BGA\1'
+    
+    print(f"📂 正在读取目录: {folder_path}")
+    
+    if not os.path.exists(folder_path):
+        print(f"❌ 路径不存在：{folder_path}")
+        exit()
+    
+    # === 选择是否保存 ===
+    SAVE_IMAGE = False  # 设为 True 则保存，False 则只显示
+    
+    if SAVE_IMAGE:
+        output_dir = r'D:\Master\小论文\数据记录\小论文对比实验曲线图\BGA\1'
+        os.makedirs(output_dir, exist_ok=True)
+        save_path = os.path.join(output_dir, 'PR_Curve_Comparison.png')
+        plot_pr_curves_from_csv_folder(folder_path, save=True, save_path=save_path)
+    else:
+        plot_pr_curves_from_csv_folder(folder_path, save=False)
